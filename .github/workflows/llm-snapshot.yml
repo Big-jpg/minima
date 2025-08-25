@@ -1,0 +1,79 @@
+name: LLM Snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      redact:
+        description: "Redact secrets (true/false)"
+        required: false
+        default: "true"
+      maxFileMB:
+        description: "Max file size per file (MB)"
+        required: false
+        default: "5"
+      include:
+        description: "Force-include regex (comma-separated)"
+        required: false
+        default: ""
+      exclude:
+        description: "Exclude regex (comma-separated)"
+        required: false
+        default: ""
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install PowerShell & utils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y powershell git zip
+
+      - name: Run snapshot
+        shell: pwsh
+        run: |
+          if (-not (Test-Path ./llm_snapshot_v2.ps1)) {
+            Write-Error "llm_snapshot_v2.ps1 not found at repo root."
+          }
+
+          $include = "${{ inputs.include }}".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          $exclude = "${{ inputs.exclude }}".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+
+          $args = @(
+            "-ProjectFolder", (Get-Location).Path,
+            "-RedactSecrets:$([bool]::Parse('${{ inputs.redact }}'))",
+            "-MaxFileMB", "${{ inputs.maxFileMB }}",
+            "-Zip"
+          )
+          if ($include.Count -gt 0) { $args += @("-Include"); $args += $include }
+          if ($exclude.Count -gt 0) { $args += @("-Exclude"); $args += $exclude }
+
+          pwsh -File ./llm_snapshot_v2.ps1 @args
+
+          # capture the newest snapshot dir for upload
+          $dir = Get-ChildItem -Directory .. |
+            Where-Object Name -like 'llm_snapshot_*' |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if (-not $dir) { Write-Error "Snapshot directory not found." }
+          "SNAPDIR=$($dir.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload snapshot (folder)
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-folder
+          path: ${{ env.SNAPDIR }}
+
+      - name: Upload snapshot (zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-zip
+          path: ${{ env.SNAPDIR }}.zip
