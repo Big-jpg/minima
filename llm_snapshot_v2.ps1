@@ -173,17 +173,22 @@ function Show-Tree {
         [bool]$last = $true,
         [ref]$outputLines
     )
+
     $name = Split-Path $path -Leaf
     $marker = if ($last) { "└── " } else { "├── " }
     $outputLines.Value += "$indent$marker$name"
 
     $childIndent = if ($last) { "$indent    " } else { "$indent│   " }
 
-    $items = Get-ChildItem -Path $path -Force | Where-Object {
-        $_.Name -ne '.' -and $_.Name -ne '..' -and -not ($DefaultExcludedDirs -contains $_.Name)
+    # Force array so .Count is always valid, even for a single child
+    $items = @( Get-ChildItem -Path $path -Force | Where-Object {
+        $_.Name -ne '.' -and $_.Name -ne '..' -and
+        -not ($DefaultExcludedDirs -contains $_.Name)
     } | Sort-Object {
         if ($_.PSIsContainer) { "0$($_.Name)" } else { "1$($_.Name)" }
-    }
+    })
+
+    if (-not $items -or $items.Count -eq 0) { return }
 
     for ($i = 0; $i -lt $items.Count; $i++) {
         $isLast = ($i -eq $items.Count - 1)
@@ -195,6 +200,7 @@ function Show-Tree {
         }
     }
 }
+
 
 # --- Collect files ---
 Write-Info "Scanning files under: $Root"
