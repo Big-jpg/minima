@@ -1,1 +1,0 @@
-#minima ReadMe open
