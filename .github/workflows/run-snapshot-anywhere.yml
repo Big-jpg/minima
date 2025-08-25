@@ -1,0 +1,139 @@
+name: External LLM Snapshot
+
+on:
+  # You can run it directly from the controller repo UI
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: "owner/repo of the target"
+        required: true
+        default: "owner/repo"
+      ref:
+        description: "branch, tag or commit SHA"
+        required: false
+        default: "main"
+      redact:
+        description: "Redact secrets (true/false)"
+        required: false
+        default: "true"
+      maxFileMB:
+        description: "Max per-file size (MB)"
+        required: false
+        default: "5"
+      include:
+        description: "Force-include regex (comma-separated)"
+        required: false
+        default: ""
+      exclude:
+        description: "Exclude regex (comma-separated)"
+        required: false
+        default: ""
+  # This makes the workflow callable from OTHER repos
+  workflow_call:
+    inputs:
+      target_repo:
+        description: "owner/repo of the target"
+        required: true
+        type: string
+      ref:
+        description: "branch, tag or commit SHA"
+        required: false
+        default: "main"
+        type: string
+      redact:
+        description: "Redact secrets"
+        required: false
+        default: true
+        type: boolean
+      maxFileMB:
+        description: "Max per-file size (MB)"
+        required: false
+        default: 5
+        type: number
+      include:
+        description: "Force-include regex (comma-separated)"
+        required: false
+        default: ""
+        type: string
+      exclude:
+        description: "Exclude regex (comma-separated)"
+        required: false
+        default: ""
+        type: string
+    # The caller can pass secrets (e.g., a PAT) into this workflow.
+    secrets:
+      SNAPSHOT_TOKEN:
+        required: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read  # read-only is enough for cloning/checkout
+    steps:
+      # 1) Checkout this controller repo (to get llm_snapshot_v2.ps1)
+      - name: Checkout controller
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install PowerShell & utils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y powershell git zip
+
+      # 2) Checkout the TARGET repo into ./target
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target_repo }}
+          ref: ${{ inputs.ref }}
+          # If caller provided SNAPSHOT_TOKEN, use it; else fall back to this run's GITHUB_TOKEN.
+          token: ${{ secrets.SNAPSHOT_TOKEN || github.token }}
+          path: target
+          fetch-depth: 1
+
+      # 3) Run your snapshot script against ./target
+      - name: Run snapshot
+        shell: pwsh
+        run: |
+          if (-not (Test-Path ./llm_snapshot_v2.ps1)) {
+            Write-Error "llm_snapshot_v2.ps1 not found in controller repo root."
+          }
+
+          $include = "${{ inputs.include }}".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          $exclude = "${{ inputs.exclude }}".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+
+          $args = @(
+            "-ProjectFolder", (Resolve-Path "./target").Path,
+            "-RedactSecrets:$([bool]::Parse('${{ inputs.redact }}'))",
+            "-MaxFileMB", "${{ inputs.maxFileMB }}",
+            "-Zip"
+          )
+          if ($include.Count -gt 0) { $args += @("-Include"); $args += $include }
+          if ($exclude.Count -gt 0) { $args += @("-Exclude"); $args += $exclude }
+
+          pwsh -File ./llm_snapshot_v2.ps1 @args
+
+          # Find the newest snapshot dir created alongside ./target
+          $dir = Get-ChildItem -Directory .. |
+            Where-Object Name -like 'llm_snapshot_*' |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if (-not $dir) { Write-Error "Snapshot directory not found." }
+          "SNAPDIR=$($dir.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "TARGET=${{ inputs.target_repo }}@${{ inputs.ref }}" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # 4) Upload artifacts
+      - name: Upload snapshot (folder)
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-${{ env.TARGET }}-folder
+          path: ${{ env.SNAPDIR }}
+
+      - name: Upload snapshot (zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-${{ env.TARGET }}-zip
+          path: ${{ env.SNAPDIR }}.zip
