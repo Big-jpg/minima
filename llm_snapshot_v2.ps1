@@ -362,5 +362,3 @@ if (Test-Path $GitLogFile) {
 Write-Host "✅ Summary:              $Summary"    -ForegroundColor Green
 if ($Zip) { Write-Host "✅ Zip:                  $OutputDir.zip" -ForegroundColor Green }
 Write-Host ""
-
-Start-Process "explorer.exe" $outputDir
