@@ -48,7 +48,7 @@ jobs:
 
     steps:
       - name: Checkout controller repo
-        uses: actions/checkout
+        uses: actions/checkout@v4
         with:
           repository: ${{ env.CONTROLLER_REPO }}
           ref: ${{ env.CONTROLLER_REF }}
@@ -61,17 +61,14 @@ jobs:
           sudo apt-get install -y powershell git zip curl jq
 
       - name: Checkout target repo (shallow; blobless)
-        uses: actions/checkout
+        uses: actions/checkout@v4
         with:
           repository: ${{ inputs.target_repo }}
           ref: ${{ inputs.ref }}
           token: ${{ secrets.SNAPSHOT_TOKEN || github.token }}
           path: target
-          # speed & safety
           fetch-depth: 1
-          # drastically reduces payload for large repos
           filter: blob:none
-          # submodules/LFS off by default
           submodules: false
           lfs: false
 
@@ -139,21 +136,21 @@ jobs:
 
       - name: (Optional) Gitleaks secret scan
         if: ${{ inputs.run_gitleaks == true }}
-        uses: zricethezav/gitleaks-action
+        uses: zricethezav/gitleaks-action@v2
         with:
           args: detect --source=target --report-format json --report-path gitleaks_report.json
         continue-on-error: true
 
       - name: (Optional) SBOM (Syft CycloneDX)
         if: ${{ inputs.run_sbom == true }}
-        uses: anchore/sbom-action
+        uses: anchore/sbom-action@v0.16.0
         with:
           path: target
           format: cyclonedx-json
           output-file: sbom.cdx.json
 
       - name: Upload snapshot (folder)
-        uses: actions/upload-artifact
+        uses: actions/upload-artifact@v4
         with:
           name: snapshot-${{ env.SAFE_TARGET }}-folder
           path: ${{ env.SNAPDIR }}
@@ -161,7 +158,7 @@ jobs:
           retention-days: 14
 
       - name: Upload snapshot (zip)
-        uses: actions/upload-artifact
+        uses: actions/upload-artifact@v4
         with:
           name: snapshot-${{ env.SAFE_TARGET }}-zip
           path: ${{ env.ZIPPATH }}
@@ -169,7 +166,7 @@ jobs:
           retention-days: 14
 
       - name: Upload scans (if present)
-        uses: actions/upload-artifact
+        uses: actions/upload-artifact@v4
         with:
           name: snapshot-${{ env.SAFE_TARGET }}-extras
           path: |
