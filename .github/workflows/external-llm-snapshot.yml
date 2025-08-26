@@ -125,12 +125,15 @@ jobs:
           $safe  = $safe -replace '[\r\n<>"]','-'
           "SAFE_TARGET=$safe"    | Out-File -FilePath $env:GITHUB_ENV -Append
 
-          # Attach a compact meta summary to job summary
-          if (Test-Path "$snapDir/snapshot_meta.json") {
-            $meta = Get-Content "$snapDir/snapshot_meta.json" -Raw
-            Add-Content $env:GITHUB_STEP_SUMMARY "### Snapshot meta (excerpt)"
-            Add-Content $env:GITHUB_STEP_SUMMARY "```${meta.Substring(0,[Math]::Min($meta.Length,4000))}```"
-          }
+          # Attach a compact meta summary to job summary (safe: no here-strings, no inline JSON in quotes)
+            if (Test-Path "$snapDir/snapshot_meta.json") {
+              $meta    = Get-Content "$snapDir/snapshot_meta.json" -Raw
+              $snippet = $meta.Substring(0, [Math]::Min($meta.Length, 4000))
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '### Snapshot meta (excerpt)'
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```json'
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $snippet
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
+            }
 
       - name: (Optional) Gitleaks secret scan
         if: ${{ inputs.run_gitleaks == true }}
