@@ -42,15 +42,15 @@ on:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     permissions:
       contents: read
     steps:
+      # 1) Checkout the CONTROLLER repo (this repo) explicitly, into ./controller
       - name: Checkout controller repo
         uses: actions/checkout@v4
         with:
-          repository: Big-jpg/minima         # controller repo
-          ref: ${{ github.ref }}
+          repository: Big-jpg/minima         # <-- controller repo
+          ref: ${{ github.ref }}             # e.g. main (or the tag invoking it)
           path: controller
           fetch-depth: 1
 
@@ -59,15 +59,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y powershell git zip
 
+      # 2) Checkout the TARGET repo into ./target
       - name: Checkout target repo
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.target_repo }}
           ref: ${{ inputs.ref }}
-          token: ${{ secrets.SNAPSHOT_TOKEN || github.token }}   # PAT for private; default token for public
+          token: ${{ secrets.SNAPSHOT_TOKEN || github.token }}  # PAT for private, default for public
           path: target
           fetch-depth: 1
 
+      # 3) Run snapshot using the script from ./controller
       - name: Run snapshot
         shell: pwsh
         run: |
@@ -81,7 +83,6 @@ jobs:
             "-ProjectFolder", (Resolve-Path "./target").Path,
             "-RedactSecrets:$([bool]::Parse('${{ inputs.redact }}'))",
             "-MaxFileMB", "${{ inputs.maxFileMB }}",
-            "-OutputDir", (Join-Path (Get-Location) "out_snapshot"),
             "-Zip"
           )
           if ($include.Count -gt 0) { $args += @("-Include"); $args += $include }
@@ -89,37 +90,42 @@ jobs:
 
           pwsh -File $script @args
 
-          # Export paths and safe artifact name
-          $snapDir = Resolve-Path "./out_snapshot"
-          "SNAPDIR=$snapDir" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "ZIPPATH=$snapDir.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+          # Find snapshot directory in current workspace (not parent)
+          $root = Get-Location
+          $dir = Get-ChildItem -Directory $root |
+            Where-Object { $_.Name -like 'llm_snapshot_*' } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
 
-          $label = "${{ inputs.target_repo }}@${{ inputs.ref }}"
-          $safe  = $label.Replace('/','-').Replace(':','-').Replace('@','-').Replace('|','-').Replace('*','-').Replace('?','-').Replace('\','-')
-          $safe  = $safe -replace '[\r\n<>"]','-'
+          if (-not $dir) {
+            $dir = Get-ChildItem -Directory $root -Recurse |
+              Where-Object { $_.FullName -match '/llm_snapshot_\d{8}_\d{6}$' } |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 1
+          }
+
+          if (-not $dir) { Write-Error "Snapshot directory not found." }
+
+          # Export paths & human label
+          "SNAPDIR=$($dir.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ZIPPATH=$($dir.FullName).zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "TARGET=${{ inputs.target_repo }}@${{ inputs.ref }}" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          # Make an artifact-safe name (no / : < > | * ? \r \n \)
+          $safe = "${{ inputs.target_repo }}@${{ inputs.ref }}"
+          $safe = $safe.Replace('/','-').Replace(':','-').Replace('@','-').Replace('|','-').Replace('*','-').Replace('?','-').Replace('\','-')
+          $safe = $safe -replace '[\r\n<>"]','-'
           "SAFE_TARGET=$safe" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-          # Job summary
-          $sum = @"
-### Snapshot complete
-- Target: $label  
-- Folder: `$snapDir`  
-- Zip:    `$($snapDir).zip`
-"@
-          $sum | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-
+      # 4) Upload artifacts with safe names
       - name: Upload snapshot (folder)
         uses: actions/upload-artifact@v4
         with:
           name: snapshot-${{ env.SAFE_TARGET }}-folder
           path: ${{ env.SNAPDIR }}
-          if-no-files-found: warn
-          retention-days: 14
 
       - name: Upload snapshot (zip)
         uses: actions/upload-artifact@v4
         with:
           name: snapshot-${{ env.SAFE_TARGET }}-zip
           path: ${{ env.ZIPPATH }}
-          if-no-files-found: error
-          retention-days: 14
