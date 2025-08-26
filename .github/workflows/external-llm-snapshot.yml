@@ -66,7 +66,7 @@ jobs:
           foreach ($p in $candidates) {
             if (Test-Path $p) { $script = (Resolve-Path $p).Path; break }
           }
-    
+      
           # Fallback: fetch raw file if not found (public controller repo)
           if (-not $script) {
             $raw = "https://raw.githubusercontent.com/Big-jpg/minima/main/.controller/llm_snapshot_v2.ps1"
@@ -75,7 +75,7 @@ jobs:
             if (-not $?) { Write-Error "Failed to fetch llm_snapshot_v2.ps1"; exit 1 }
             $script = (Resolve-Path "./controller/llm_snapshot_v2.ps1").Path
           }
-    
+      
           $include = "${{ inputs.include }}".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
           $exclude = "${{ inputs.exclude }}".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
       
@@ -92,7 +92,7 @@ jobs:
           if ($exclude.Count -gt 0) { $args += @("-Exclude"); $args += $exclude }
       
           pwsh -File $script @args
-    
+      
           # Export paths and safe artifact name
           $snapDir = (Resolve-Path $outDir).Path
           "SNAPDIR=$snapDir"     | Out-File -FilePath $env:GITHUB_ENV -Append
@@ -103,13 +103,14 @@ jobs:
           $safe  = $safe -replace '[\r\n<>"]','-'
           "SAFE_TARGET=$safe"    | Out-File -FilePath $env:GITHUB_ENV -Append
       
-          # Write a small job summary without here-strings (avoids YAML indent issues)
-          $lines = @()
-          $lines += "### Snapshot complete"
-          $lines += "- Target: $label  "
-          $lines += "- Folder: `$snapDir`  "
-          $lines += "- Zip: `$($snapDir).zip`"
-          ($lines -join "`n") | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          # Job summary (no backticks, no "`n" joins)
+          $lines = @(
+            "### Snapshot complete",
+            "- Target: $label",
+            "- Folder: $snapDir",
+            "- Zip: $($snapDir).zip"
+          )
+          [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, ($lines -join [System.Environment]::NewLine))
 
       - name: Upload snapshot (folder)
         uses: actions/upload-artifact@v4
