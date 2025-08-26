@@ -121,8 +121,9 @@ function ShouldSkip([System.IO.FileInfo]$file){
     if ($DefaultExcludedFiles -contains $name) { $SkipReasons.FileName++; return $true }
 
     foreach ($d in $DefaultExcludedDirs) {
-        if ($file.FullName -match [regex]::Escape([System.IO.Path]::DirectorySeparatorChar + $d + [System.IO.Path]::DirectorySeparatorChar) `
-            -or $file.FullName -like "*$([System.IO.Path]::DirectorySeparatorChar)$d*") { $SkipReasons.Dir++; return $true }
+        $sep = '[\\/]'
+        $dirPattern = "(^|$sep)" + [regex]::Escape($d) + "($sep|$)"
+        if ($rp -match $dirPattern) { $SkipReasons.Dir++; return $true }
     }
 
     if ($UserExclude -and ($UserExclude | Where-Object { $rp -match $_ })) { $SkipReasons.UserExcl++; return $true }
