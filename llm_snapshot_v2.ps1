@@ -83,7 +83,6 @@ function IsLikelyBinary([string]$path) {
     try {
         $bytes = [System.IO.File]::ReadAllBytes($path)
         if ($bytes.Length -eq 0) { return $false }
-        # UTF-16 BOM detection – treat as text
         if ($bytes.Length -ge 2 -and (
             ($bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) -or
             ($bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF))) { return $false }
@@ -93,7 +92,19 @@ function IsLikelyBinary([string]$path) {
             if (($b -eq 0) -or ($b -lt 9) -or (($b -ge 14) -and ($b -le 31))) { $nonText++ }
         }
         return ($nonText / $sample) -gt 0.30
-    } catch { return $true }
+    } catch {
+        # If we can't read it, assume text so we don't over-skip.
+        return $false
+    }
+}
+
+$SkipReasons = @{
+  Ext      = 0
+  FileName = 0
+  Dir      = 0
+  Size     = 0
+  Binary   = 0
+  UserExcl = 0
 }
 
 function ShouldKeepByManifest([string]$name){ return $IncludeManifests -and ($ManifestKeep -contains $name) }
@@ -106,22 +117,24 @@ function ShouldSkip([System.IO.FileInfo]$file){
     if (ShouldKeepByManifest $name) { return $false }
     if ($Include -and ($Include | Where-Object { $rp -match $_ })) { return $false }
 
-    if ($DefaultExcludedExts -contains $ext) { return $true }
-    if ($DefaultExcludedFiles -contains $name) { return $true }
+    if ($DefaultExcludedExts -contains $ext) { $SkipReasons.Ext++; return $true }
+    if ($DefaultExcludedFiles -contains $name) { $SkipReasons.FileName++; return $true }
+
     foreach ($d in $DefaultExcludedDirs) {
         if ($file.FullName -match [regex]::Escape([System.IO.Path]::DirectorySeparatorChar + $d + [System.IO.Path]::DirectorySeparatorChar) `
-            -or $file.FullName -like "*$([System.IO.Path]::DirectorySeparatorChar)$d") { return $true }
+            -or $file.FullName -like "*$([System.IO.Path]::DirectorySeparatorChar)$d*") { $SkipReasons.Dir++; return $true }
     }
 
-    if ($UserExclude -and ($UserExclude | Where-Object { $rp -match $_ })) { return $true }
+    if ($UserExclude -and ($UserExclude | Where-Object { $rp -match $_ })) { $SkipReasons.UserExcl++; return $true }
 
     $maxBytes = $MaxFileMB * 1MB
-    if ($file.Length -gt $maxBytes -and -not (ShouldKeepByManifest $name)) { return $true }
+    if ($file.Length -gt $maxBytes -and -not (ShouldKeepByManifest $name)) { $SkipReasons.Size++; return $true }
 
-    if (IsLikelyBinary $file.FullName -and -not (ShouldKeepByManifest $name)) { return $true }
+    if (IsLikelyBinary $file.FullName -and -not (ShouldKeepByManifest $name)) { $SkipReasons.Binary++; return $true }
 
     return $false
 }
+
 
 # Expanded secret patterns
 $SecretPatterns = @(
@@ -264,6 +277,14 @@ foreach ($k in ($extStats.Keys | Sort-Object)) {
     $s = $extStats[$k]; $kb = [math]::Round($s.Bytes/1KB,1)
     $summaryLines += ("  {0,-6}  files={1,5}  loc={2,7}  size={3,8} KB" -f $k, $s.Count, $s.LOC, $kb)
 }
+$summaryLines += ""
+$summaryLines += "Skip reasons:"
+$summaryLines += "  By extension: $($SkipReasons.Ext)"
+$summaryLines += "  By file name: $($SkipReasons.FileName)"
+$summaryLines += "  By directory: $($SkipReasons.Dir)"
+$summaryLines += "  By user exclude: $($SkipReasons.UserExcl)"
+$summaryLines += "  By size: $($SkipReasons.Size)"
+$summaryLines += "  Binary heuristic: $($SkipReasons.Binary)"
 $summaryLines += ""
 $summaryLines += "Total LOC (approx): $totalLOC"
 $summaryLines += ""
