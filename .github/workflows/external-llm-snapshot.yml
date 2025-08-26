@@ -55,59 +55,61 @@ jobs:
       - name: Run snapshot
         shell: pwsh
         run: |
-          # Resolve script path (supports both repo root and .controller/)
+          $ErrorActionPreference = 'Stop'
+      
+          # Locate the script (supports both repo root and .controller/)
           $candidates = @(
             "./controller/.controller/llm_snapshot_v2.ps1",
             "./controller/llm_snapshot_v2.ps1"
           )
           $script = $null
           foreach ($p in $candidates) {
-            if (Test-Path $p) { $script = Resolve-Path $p; break }
+            if (Test-Path $p) { $script = (Resolve-Path $p).Path; break }
           }
-
+    
           # Fallback: fetch raw file if not found (public controller repo)
           if (-not $script) {
-            $raw = "https://raw.githubusercontent.com/${{ env.CONTROLLER_REPO }}/${{ env.CONTROLLER_REF }}/.controller/llm_snapshot_v2.ps1"
+            $raw = "https://raw.githubusercontent.com/Big-jpg/minima/main/.controller/llm_snapshot_v2.ps1"
             Write-Host "Script not found locally. Fetching: $raw"
-            Invoke-WebRequest -Uri $raw -OutFile "./controller/llm_snapshot_v2.ps1" -UseBasicParsing
-            if (-not (Test-Path "./controller/llm_snapshot_v2.ps1")) {
-              Write-Error "Failed to fetch llm_snapshot_v2.ps1"; exit 1
-            }
-            $script = Resolve-Path "./controller/llm_snapshot_v2.ps1"
+            curl -fsSL $raw -o ./controller/llm_snapshot_v2.ps1
+            if (-not $?) { Write-Error "Failed to fetch llm_snapshot_v2.ps1"; exit 1 }
+            $script = (Resolve-Path "./controller/llm_snapshot_v2.ps1").Path
           }
-
+    
           $include = "${{ inputs.include }}".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
           $exclude = "${{ inputs.exclude }}".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
-
+      
+          $outDir = Join-Path (Get-Location) "out_snapshot"
+      
           $args = @(
             "-ProjectFolder", (Resolve-Path "./target").Path,
             "-RedactSecrets:$([bool]::Parse('${{ inputs.redact }}'))",
             "-MaxFileMB", "${{ inputs.maxFileMB }}",
-            "-OutputDir", (Join-Path (Get-Location) "out_snapshot"),
+            "-OutputDir", $outDir,
             "-Zip"
           )
           if ($include.Count -gt 0) { $args += @("-Include"); $args += $include }
           if ($exclude.Count -gt 0) { $args += @("-Exclude"); $args += $exclude }
-
+      
           pwsh -File $script @args
-
+    
           # Export paths and safe artifact name
-          $snapDir = Resolve-Path "./out_snapshot"
-          "SNAPDIR=$snapDir"        | Out-File -FilePath $env:GITHUB_ENV -Append
-          "ZIPPATH=$snapDir.zip"    | Out-File -FilePath $env:GITHUB_ENV -Append
-
+          $snapDir = (Resolve-Path $outDir).Path
+          "SNAPDIR=$snapDir"     | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ZIPPATH=$snapDir.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+      
           $label = "${{ inputs.target_repo }}@${{ inputs.ref }}"
           $safe  = $label.Replace('/','-').Replace(':','-').Replace('@','-').Replace('|','-').Replace('*','-').Replace('?','-').Replace('\','-')
           $safe  = $safe -replace '[\r\n<>"]','-'
-          "SAFE_TARGET=$safe"       | Out-File -FilePath $env:GITHUB_ENV -Append
-
-          # Job summary
-          $sum = @"
-
-          - Target: $label  
-          - Folder: `$snapDir`  
-          - Zip:    `$($snapDir).zip`
-          "@ $sum | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "SAFE_TARGET=$safe"    | Out-File -FilePath $env:GITHUB_ENV -Append
+      
+          # Write a small job summary without here-strings (avoids YAML indent issues)
+          $lines = @()
+          $lines += "### Snapshot complete"
+          $lines += "- Target: $label  "
+          $lines += "- Folder: `$snapDir`  "
+          $lines += "- Zip: `$($snapDir).zip`"
+          ($lines -join "`n") | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
 
       - name: Upload snapshot (folder)
         uses: actions/upload-artifact@v4
