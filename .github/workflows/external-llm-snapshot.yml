@@ -39,8 +39,6 @@ jobs:
     # Tighten permissions (OIDC only if you later push to cloud)
     permissions:
       contents: read
-      actions: read
-      id-token: write
 
     env:
       CONTROLLER_REPO: Big-jpg/minima
