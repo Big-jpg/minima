@@ -90,13 +90,25 @@ jobs:
 
           pwsh -File $script @args
 
-          $dir = Get-ChildItem -Directory .. |
-            Where-Object Name -like 'llm_snapshot_*' |
+          # >>> FIX: look in the current workspace, not the parent
+          $root = Get-Location
+          $dir = Get-ChildItem -Directory $root |
+            Where-Object { $_.Name -like 'llm_snapshot_*' } |
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
 
+          if (-not $dir) {
+            # shallow fallback (handles odd shells/paths)
+            $dir = Get-ChildItem -Directory $root -Recurse |
+              Where-Object { $_.FullName -match '/llm_snapshot_\d{8}_\d{6}$' } |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 1
+          }
+
           if (-not $dir) { Write-Error "Snapshot directory not found." }
+
           "SNAPDIR=$($dir.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ZIPPATH=$($dir.FullName).zip" | Out-File -FilePath $env:GITHUB_ENV -Append
           "TARGET=${{ inputs.target_repo }}@${{ inputs.ref }}" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload snapshot (folder)
@@ -109,4 +121,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: snapshot-${{ env.TARGET }}-zip
-          path: ${{ env.SNAPDIR }}.zip
+          path: ${{ env.ZIPPATH }}
