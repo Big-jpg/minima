@@ -9,85 +9,55 @@ on:
       maxFileMB:  { description: "Max per-file size (MB)",     required: false, default: "5" }
       include:    { description: "Force-include regex (comma-separated)", required: false, default: "" }
       exclude:    { description: "Exclude regex (comma-separated)",       required: false, default: "" }
-      sparse:     { description: "Optional sparse checkout patterns (newline-separated)", required: false, default: "" }
-      run_gitleaks: { description: "Run Gitleaks secret scan", required: false, default: "false" }
-      run_sbom:     { description: "Generate SBOM (Syft)",     required: false, default: "false" }
   workflow_call:
     inputs:
       target_repo: { required: true,  type: string }
-      ref:         { required: false, type: string,  default: "main" }
-      redact:      { required: false, type: boolean, default: true }
-      maxFileMB:   { required: false, type: number,  default: 5 }
-      include:     { required: false, type: string,  default: "" }
-      exclude:     { required: false, type: string,  default: "" }
-      sparse:      { required: false, type: string,  default: "" }
-      run_gitleaks: { required: false, type: boolean, default: false }
-      run_sbom:    { required: false, type: boolean, default: false }
+      ref:        { required: false, type: string,  default: "main" }
+      redact:     { required: false, type: boolean, default: true }
+      maxFileMB:  { required: false, type: number,  default: 5 }
+      include:    { required: false, type: string,  default: "" }
+      exclude:    { required: false, type: string,  default: "" }
     secrets:
       SNAPSHOT_TOKEN: { required: false }
 
 jobs:
   snapshot:
-    # Avoid concurrent overlaps on same repo/ref
-    concurrency:
-      group: snapshot-${{ inputs.target_repo }}-${{ inputs.ref }}
-      cancel-in-progress: false
-
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    # Tighten permissions (OIDC only if you later push to cloud)
+    timeout-minutes: 15
     permissions:
       contents: read
-      actions: read
-      id-token: write
-
     env:
       CONTROLLER_REPO: Big-jpg/minima
       CONTROLLER_REF:  main
-
     steps:
       - name: Checkout controller repo
-        uses: actions/checkout
+        uses: actions/checkout@v4
         with:
           repository: ${{ env.CONTROLLER_REPO }}
-          ref: ${{ env.CONTROLLER_REF }}
+          ref: ${{ github.ref }}
           path: controller
           fetch-depth: 1
 
       - name: Install PowerShell & utils
         run: |
           sudo apt-get update
-          sudo apt-get install -y powershell git zip curl jq
+          sudo apt-get install -y powershell git zip curl
 
-      - name: Checkout target repo (shallow; blobless)
-        uses: actions/checkout
+      - name: Checkout target repo
+        uses: actions/checkout@v4
         with:
           repository: ${{ inputs.target_repo }}
           ref: ${{ inputs.ref }}
-          token: ${{ secrets.SNAPSHOT_TOKEN || github.token }}
+          token: ${{ secrets.SNAPSHOT_TOKEN || github.token }}   # PAT for private; default token for public
           path: target
-          # speed & safety
           fetch-depth: 1
-          # drastically reduces payload for large repos
-          filter: blob:none
-          # submodules/LFS off by default
-          submodules: false
-          lfs: false
-
-      - name: Optional sparse checkout
-        if: ${{ inputs.sparse != '' }}
-        working-directory: target
-        run: |
-          echo "${{ inputs.sparse }}" | tr ',' '\n' > sparse.txt
-          git sparse-checkout init --cone
-          git sparse-checkout set $(cat sparse.txt)
 
       - name: Run snapshot
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
+      
+          # Locate the script (supports both repo root and .controller/)
           $candidates = @(
             "./controller/.controller/llm_snapshot_v2.ps1",
             "./controller/llm_snapshot_v2.ps1"
@@ -96,64 +66,54 @@ jobs:
           foreach ($p in $candidates) {
             if (Test-Path $p) { $script = (Resolve-Path $p).Path; break }
           }
+      
+          # Fallback: fetch raw file if not found (public controller repo)
           if (-not $script) {
             $raw = "https://raw.githubusercontent.com/Big-jpg/minima/main/.controller/llm_snapshot_v2.ps1"
+            Write-Host "Script not found locally. Fetching: $raw"
             curl -fsSL $raw -o ./controller/llm_snapshot_v2.ps1
-            if (-not $?) { throw "Failed to fetch llm_snapshot_v2.ps1" }
+            if (-not $?) { Write-Error "Failed to fetch llm_snapshot_v2.ps1"; exit 1 }
             $script = (Resolve-Path "./controller/llm_snapshot_v2.ps1").Path
           }
-
+      
           $include = "${{ inputs.include }}".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
           $exclude = "${{ inputs.exclude }}".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
-
+      
           $outDir = Join-Path (Get-Location) "out_snapshot"
-
+      
           $args = @(
             "-ProjectFolder", (Resolve-Path "./target").Path,
             "-RedactSecrets:$([bool]::Parse('${{ inputs.redact }}'))",
             "-MaxFileMB", "${{ inputs.maxFileMB }}",
             "-OutputDir", $outDir,
-            "-Zip",
-            "-EmitMetadataJson"             # NEW: write snapshot_meta.json
+            "-Zip"
           )
           if ($include.Count -gt 0) { $args += @("-Include"); $args += $include }
           if ($exclude.Count -gt 0) { $args += @("-Exclude"); $args += $exclude }
-
+      
           pwsh -File $script @args
-
+      
+          # Export paths and safe artifact name
           $snapDir = (Resolve-Path $outDir).Path
           "SNAPDIR=$snapDir"     | Out-File -FilePath $env:GITHUB_ENV -Append
           "ZIPPATH=$snapDir.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
-
+      
           $label = "${{ inputs.target_repo }}@${{ inputs.ref }}"
           $safe  = $label.Replace('/','-').Replace(':','-').Replace('@','-').Replace('|','-').Replace('*','-').Replace('?','-').Replace('\','-')
           $safe  = $safe -replace '[\r\n<>"]','-'
           "SAFE_TARGET=$safe"    | Out-File -FilePath $env:GITHUB_ENV -Append
-
-          # Attach a compact meta summary to job summary
-          if (Test-Path "$snapDir/snapshot_meta.json") {
-            $meta = Get-Content "$snapDir/snapshot_meta.json" -Raw
-            Add-Content $env:GITHUB_STEP_SUMMARY "### Snapshot meta (excerpt)"
-            Add-Content $env:GITHUB_STEP_SUMMARY "```${meta.Substring(0,[Math]::Min($meta.Length,4000))}```"
-          }
-
-      - name: (Optional) Gitleaks secret scan
-        if: ${{ inputs.run_gitleaks == true }}
-        uses: zricethezav/gitleaks-action
-        with:
-          args: detect --source=target --report-format json --report-path gitleaks_report.json
-        continue-on-error: true
-
-      - name: (Optional) SBOM (Syft CycloneDX)
-        if: ${{ inputs.run_sbom == true }}
-        uses: anchore/sbom-action
-        with:
-          path: target
-          format: cyclonedx-json
-          output-file: sbom.cdx.json
+      
+          # Job summary (no backticks, no "`n" joins)
+          $lines = @(
+            "### Snapshot complete",
+            "- Target: $label",
+            "- Folder: $snapDir",
+            "- Zip: $($snapDir).zip"
+          )
+          [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, ($lines -join [System.Environment]::NewLine))
 
       - name: Upload snapshot (folder)
-        uses: actions/upload-artifact
+        uses: actions/upload-artifact@v4
         with:
           name: snapshot-${{ env.SAFE_TARGET }}-folder
           path: ${{ env.SNAPDIR }}
@@ -161,19 +121,9 @@ jobs:
           retention-days: 14
 
       - name: Upload snapshot (zip)
-        uses: actions/upload-artifact
+        uses: actions/upload-artifact@v4
         with:
           name: snapshot-${{ env.SAFE_TARGET }}-zip
           path: ${{ env.ZIPPATH }}
           if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload scans (if present)
-        uses: actions/upload-artifact
-        with:
-          name: snapshot-${{ env.SAFE_TARGET }}-extras
-          path: |
-            gitleaks_report.json
-            sbom.cdx.json
-          if-no-files-found: ignore
           retention-days: 14
