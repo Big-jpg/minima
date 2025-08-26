@@ -49,8 +49,8 @@ jobs:
       - name: Checkout controller repo
         uses: actions/checkout@v4
         with:
-          repository: Big-jpg/minima          # <— your controller repo
-          ref: ${{ github.ref }}              # e.g. main, or the tag calling it
+          repository: Big-jpg/minima         # <-- controller repo
+          ref: ${{ github.ref }}             # e.g. main (or the tag invoking it)
           path: controller
           fetch-depth: 1
 
@@ -65,7 +65,7 @@ jobs:
         with:
           repository: ${{ inputs.target_repo }}
           ref: ${{ inputs.ref }}
-          token: ${{ secrets.SNAPSHOT_TOKEN || github.token }}
+          token: ${{ secrets.SNAPSHOT_TOKEN || github.token }}  # PAT for private, default for public
           path: target
           fetch-depth: 1
 
@@ -90,7 +90,7 @@ jobs:
 
           pwsh -File $script @args
 
-          # >>> FIX: look in the current workspace, not the parent
+          # Find snapshot directory in current workspace (not parent)
           $root = Get-Location
           $dir = Get-ChildItem -Directory $root |
             Where-Object { $_.Name -like 'llm_snapshot_*' } |
@@ -98,7 +98,6 @@ jobs:
             Select-Object -First 1
 
           if (-not $dir) {
-            # shallow fallback (handles odd shells/paths)
             $dir = Get-ChildItem -Directory $root -Recurse |
               Where-Object { $_.FullName -match '/llm_snapshot_\d{8}_\d{6}$' } |
               Sort-Object LastWriteTime -Descending |
@@ -107,18 +106,26 @@ jobs:
 
           if (-not $dir) { Write-Error "Snapshot directory not found." }
 
+          # Export paths & human label
           "SNAPDIR=$($dir.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
           "ZIPPATH=$($dir.FullName).zip" | Out-File -FilePath $env:GITHUB_ENV -Append
           "TARGET=${{ inputs.target_repo }}@${{ inputs.ref }}" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+          # Make an artifact-safe name (no / : < > | * ? \r \n \)
+          $safe = "${{ inputs.target_repo }}@${{ inputs.ref }}"
+          $safe = $safe.Replace('/','-').Replace(':','-').Replace('@','-').Replace('|','-').Replace('*','-').Replace('?','-').Replace('\','-')
+          $safe = $safe -replace '[\r\n<>"]','-'
+          "SAFE_TARGET=$safe" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # 4) Upload artifacts with safe names
       - name: Upload snapshot (folder)
         uses: actions/upload-artifact@v4
         with:
-          name: snapshot-${{ env.TARGET }}-folder
+          name: snapshot-${{ env.SAFE_TARGET }}-folder
           path: ${{ env.SNAPDIR }}
 
       - name: Upload snapshot (zip)
         uses: actions/upload-artifact@v4
         with:
-          name: snapshot-${{ env.TARGET }}-zip
+          name: snapshot-${{ env.SAFE_TARGET }}-zip
           path: ${{ env.ZIPPATH }}
