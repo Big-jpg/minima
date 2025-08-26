@@ -103,12 +103,11 @@ jobs:
 
           # Job summary
           $sum = @"
-### Snapshot complete
-- Target: $label  
-- Folder: `$snapDir`  
-- Zip:    `$($snapDir).zip`
-"@
-          $sum | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+          - Target: $label  
+          - Folder: `$snapDir`  
+          - Zip:    `$($snapDir).zip`
+          "@ $sum | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
 
       - name: Upload snapshot (folder)
         uses: actions/upload-artifact@v4
